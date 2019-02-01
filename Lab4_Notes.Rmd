@@ -1,0 +1,154 @@
+---
+title: "ESm 244 Lab 4"
+author: "Alyssa Winchell"
+date: "January 31, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+Attach packages
+
+```{r include = FALSE}
+
+library(tidyverse)
+library(Ecdat)
+library(plm)
+library(lmtest)
+library(car) #for plotting
+
+```
+
+1. Part 1: Nonlinear least squares (logistic growth of bacteria)
+
+```{r}
+
+CellGrowth <- read_csv("CellGrowth.csv")
+
+#Look at it
+ggplot(CellGrowth, aes(x = Time, y = CellCount)) + 
+  geom_point()
+
+#find estimates for log growth for training model
+
+# N = A/(I + Be^(-rt)) r helps us find A, b, and r
+
+# estimate for carrying capacity: 3700
+# starting pop value (N0) is 2000, what is B? ~0.85
+# r ~ 0.1035
+
+BEstimate <- (3700-2000)/2000
+BEstimate
+
+#pop is growing exp from about time 0 - 5. model as alog for a linear relationship. this estimates r for growth rate coef
+lag_phase <- CellGrowth %>%
+  filter(Time < 5)
+
+#plot cell growth vs time to make sure its linear
+ggplot(lag_phase, aes(x = Time, y = log(CellCount)))+
+  geom_point() #looks close to linear, which means that part was def exp
+
+lm(log(CellCount) ~ Time, data = lag_phase) # r ~ 0.1035
+
+```
+
+Find model A, B, and r using Gauss-Newton method for iterative convergence (nonlinear least squares):
+
+Use the nls() fxn:
+
+```{r}
+
+cell_fit <- nls(CellCount ~ A/(1 + B*exp(-r*Time)),
+                start = list(A = 3700, B = 0.85, r = 0.1035),
+                             data = CellGrowth,
+                             trace = TRUE)
+
+cell_fit
+
+#store coeffs
+A <- coef(cell_fit)[1]
+B <- coef(cell_fit)[2]
+r <- coef(cell_fit)[3]
+
+#create a new seq of values that we want to make predictions for with model. New seq of time values of relevant times (time_seq)
+time_seq <- seq(1,20,length = 100)
+
+#plug new seq into model with the parameters A, B , and r that we found:
+cell_pred <- A/(1 + B*exp(-r*time_seq))
+
+#bind that together with original data (time_seq data):
+pred_df <- data.frame(time_seq, cell_pred)
+
+#create graph with original data and our model preds:
+ggplot(CellGrowth, aes(x = Time, y = CellCount)) +
+  geom_point(color = "Blue", size = 3) +
+  geom_line(data = pred_df, aes(x = time_seq, y = cell_pred), colour = "orange", size = 1)
+
+```
+
+Panel Regression - First Shot
+
+What is the effect of price on purchases for cigarettes?
+
+entity: State
+time variable: Year
+packpc: our dv, pack per capita
+avgprs: predictor variable of interest, average price
+
+```{r}
+
+cigs_panel <- Cigarette %>%
+  select(state, year, packpc, avgprs)
+
+ggplot(cigs_panel, aes(x = avgprs, y = packpc, group = state)) +
+  geom_point(aes(color = state)) +
+  geom_smooth(method = "lm", aes(color = state), se = FALSE, size = 0.2) #doesnt include stand eror
+
+ggplot(cigs_panel, aes(x = year, y = packpc, group = state)) +
+  geom_point(aes(color = state)) +
+  geom_smooth(method = "lm", aes(color = state), se = FALSE, size = 0.2)
+
+```
+
+Entity fixed effects model:
+
+```{r}
+
+cigs_model <- plm(packpc ~ avgprs,
+                  data = cigs_panel,
+                  index = c("state", "year"),
+                  model = "within") #EFE model
+cigs_model
+#if done with lm, would have 50 different levels for state = 49 non reference states
+
+```
+
+When we account for entity fixed effects, we would expect to see a decrease of -0.33 packs per person for every unit decrease in price ($1).
+
+Robust Stand error for panel regression on large data sets:
+```{r}
+
+coeftest(cigs_model, vcov. = vcovHC(cigs_model, type = "HC1")) #more conservatice estimate of relationship, esp with regards to stand error = slightly different coef.
+
+```
+
+Other things are likely affecting cig trends in all states. Add time fixed effects:
+
+```{r}
+
+et_cigs_model <- plm(packpc ~ avgprs,
+                     data = cigs_panel,
+                     index = c("state", "year"),
+                     model = "within",
+                     effect = "twoways")
+et_cigs_model
+
+#in console: ?pFtest. is there a differnce between the models? is the model improved? 
+pFtest(et_cigs_model, cigs_model)
+
+```
+
+There is a sig additive effect of adding a time fixed effect.
